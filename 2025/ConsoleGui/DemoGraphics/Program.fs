@@ -2,7 +2,7 @@
 open ConsoleRenderer
 open Types
 open Screen
-open System.Runtime.InteropServices // For Windows Console API
+open Mindmagma.Curses
 
 (*
 
@@ -41,52 +41,6 @@ type UModel = {
     LastKey: string
 }
 
-#if WINDOWS
-[<DllImport("kernel32.dll", SetLastError = true)>]
-extern bool ReadConsoleInput(IntPtr hConsoleInput, INPUT_RECORD[] lpBuffer, uint nLength, uint* lpNumberOfEventsRead)
-
-[<DllImport("kernel32.dll", SetLastError = true)>]
-extern IntPtr GetStdHandle(int nStdHandle)
-
-type INPUT_RECORD_TYPE =
-    | KEY_EVENT = 0x0001us
-    | MOUSE_EVENT = 0x0002us
-
-[<Struct; StructLayout(LayoutKind.Sequential)>]
-type COORD =
-    val X: int16
-    val Y: int16
-    new(x, y) = { X = x; Y = y }
-
-[<Struct; StructLayout(LayoutKind.Sequential)>]
-type MOUSE_EVENT_RECORD =
-    val dwMousePosition: COORD
-    val dwButtonState: uint32
-    val dwControlKeyState: uint32
-    val dwEventFlags: uint32
-
-[<Struct; StructLayout(LayoutKind.Sequential)>]
-type KEY_EVENT_RECORD =
-    val bKeyDown: bool
-    val wRepeatCount: uint16
-    val wVirtualKeyCode: uint16
-    val wVirtualScanCode: uint16
-    val UnicodeChar: char
-    val dwControlKeyState: uint32
-
-[<Struct; StructLayout(LayoutKind.Explicit)>]
-type INPUT_RECORD_UNION =
-    [<FieldOffset(0)>]
-    val KeyEvent: KEY_EVENT_RECORD
-    [<FieldOffset(0)>]
-    val MouseEvent: MOUSE_EVENT_RECORD
-
-[<Struct; StructLayout(LayoutKind.Sequential)>]
-type INPUT_RECORD =
-    val EventType: INPUT_RECORD_TYPE
-    val Event: INPUT_RECORD_UNION
-#endif
-
 type InputEvent =
     | KeyPress of char
     | MouseClick of int * int  // x, y coordinates
@@ -110,38 +64,21 @@ let centerText (row: int) (text: string) (model: Model<'a>) : Model<'a> =
     drawString row col text model
 
 let readNextInput() : InputEvent =
-    let isWindows = 
-        match System.Environment.OSVersion.Platform with
-        | PlatformID.Win32NT -> true
-        | _ -> false
-
-    if isWindows then
-        #if WINDOWS
-        let hStdin = GetStdHandle(-10) // STD_INPUT_HANDLE
-        let mutable numEventsRead = 0u
-        let buffer = Array.zeroCreate<INPUT_RECORD> 1
-        if ReadConsoleInput(hStdin, buffer, 1u, &&numEventsRead) then
-            match buffer.[0].EventType with
-            | INPUT_RECORD_TYPE.KEY_EVENT when buffer.[0].Event.KeyEvent.bKeyDown ->
-                KeyPress(buffer.[0].Event.KeyEvent.UnicodeChar)
-            | INPUT_RECORD_TYPE.MOUSE_EVENT when buffer.[0].Event.MouseEvent.dwButtonState <> 0u ->
-                MouseClick(
-                    int buffer.[0].Event.MouseEvent.dwMousePosition.X,
-                    int buffer.[0].Event.MouseEvent.dwMousePosition.Y)
-            | _ -> NoEvent
-        else NoEvent
-        #else
-        NoEvent
-        #endif
-    else
-        if Console.KeyAvailable then
-            let key = Console.ReadKey(true)
-            if key.Key = ConsoleKey.Escape then
-                KeyPress('\u001b') // ESC character
-            else
-                KeyPress(key.KeyChar)
+    if Console.KeyAvailable then
+        let key = Console.ReadKey(true)
+        if key.Key = ConsoleKey.Escape then
+            KeyPress('\u001b') // ESC character
         else
-            NoEvent
+            KeyPress(key.KeyChar)
+    else
+        match NCurses.GetChar() with
+        | CursesKey.MOUSE ->
+            try
+                let mouse = NCurses.GetMouse()
+                MouseClick(mouse.x, mouse.y)
+            with
+            | _ -> NoEvent
+        | _ -> NoEvent
 
 let rec cliLoop (model: Model<UModel>) =
     let model = { model with NextScreen = Map.empty }
@@ -152,6 +89,7 @@ let rec cliLoop (model: Model<UModel>) =
         |> centerText (model.Height / 2) $"Last key pressed: {model.UModel.LastKey}"
         |> drawString (model.Height - 1) 0 "Press any key to increment counter. Press ESC to exit."
         |> render
+
 
     match readNextInput() with
     | KeyPress('\u001b') -> // ESC key
@@ -173,6 +111,7 @@ let rec cliLoop (model: Model<UModel>) =
 [<EntryPoint>]
 let main argv =
     let canvas = new ConsoleRenderer.ConsoleCanvas()
+    let Screen = NCurses.InitScreen()
     
     let initialState = { 
         ConsoleScreen = Map.empty, canvas
@@ -184,9 +123,24 @@ let main argv =
             LastKey = "none"
         }
     }
+
+    let screen = NCurses.InitScreen()
+    NCurses.NoDelay(screen, true)
+    NCurses.NoEcho()
+    NCurses.Keypad(screen, true)
+    let eventsToReport = 
+        CursesMouseEvent.BUTTON1_CLICKED |||
+        CursesMouseEvent.BUTTON2_CLICKED |||
+        CursesMouseEvent.REPORT_MOUSE_POSITION
+
+    let availableMouseEvents = NCurses.MouseMask(eventsToReport)
+
+
     
     let model = initScreen initialState
     
     let _ = cliLoop model
+
+    NCurses.EndWin()
     
     0

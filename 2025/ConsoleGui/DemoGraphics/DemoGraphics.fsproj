@@ -18,6 +18,8 @@
 
   <ItemGroup>
     <PackageReference Include="ConsoleRenderer" Version="0.7.1" />
+    <PackageReference Include="dotnet-curses" Version="1.0.3" />
+    <PacakgeReference Include="MindMagma.Curses" Version="1.0.0" />
   </ItemGroup>
 
 </Project>
